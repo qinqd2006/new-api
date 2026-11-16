@@ -10,3 +10,24 @@ docs
 /web/node_modules
 /web/dist
 !THIRD-PARTY-LICENSES.md
+
+/web/dist-portal
+/web/src/routeTree.portal.gen.js
+
+# Credentials, local probes, and deployment backups must never enter build layers.
+**/.env
+**/.env.*
+!**/.env.example
+.local-tests
+deploy/single-host/backups
+deploy/single-host/.state
+deploy/single-host/.build
+data
+logs
+upload
+.codex
+.agents
+**/*.dump
+**/*.pem
+**/*.key
+**/__pycache__

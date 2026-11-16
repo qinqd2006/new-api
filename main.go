@@ -83,7 +83,7 @@ func main() {
 		// for compatibility with old versions
 		common.MemoryCacheEnabled = true
 	}
-	if common.MemoryCacheEnabled {
+	if common.MemoryCacheEnabled && !common.PortalOnly {
 		common.SysLog(common.LogText("memory cache enabled"))
 		common.SysLog(common.LogText("sync frequency: %d seconds", common.SyncFrequency))
 
@@ -112,50 +112,56 @@ func main() {
 
 	// 热更新配置
 	go model.SyncOptions(common.SyncFrequency)
-	go controller.SyncTaskPlugins()
+	if !common.PortalOnly {
+		go controller.SyncTaskPlugins()
+	}
 
 	// 周期性重载授权策略，保证多节点/多 master 部署下权限变更能传播到每个实例
 	go authz.StartPolicySync(common.SyncFrequency)
 
 	// 数据看板
-	go model.UpdateQuotaData()
-
-	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
-		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
-		if err != nil {
-			common.FatalLog(common.LogText("failed to parse CHANNEL_UPDATE_FREQUENCY: %s", err.Error()))
-		}
-		go controller.AutomaticallyUpdateChannels(frequency)
+	if !common.PortalOnly {
+		go model.UpdateQuotaData()
 	}
 
-	// Codex credential auto-refresh check every 10 minutes, refresh when expires within 1 day
-	service.StartCodexCredentialAutoRefreshTask()
-
-	// Subscription quota reset task (daily/weekly/monthly/custom)
-	service.StartSubscriptionQuotaResetTask()
-
-	// Report this process as a system instance so the System Info page can show
-	// all currently alive nodes in multi-instance deployments.
-	service.StartSystemInstanceReporter()
-
-	// Wire task polling adaptor factory (breaks service -> relay import cycle).
-	// Must run before the system task runner starts: the async_task_poll handler
-	// calls service.RunTaskPollingOnce, which needs this factory set.
-	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
-		a := relay.GetTaskAdaptor(platform)
-		if a == nil {
-			return nil
+	if !common.PortalOnly {
+		if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
+			frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
+			if err != nil {
+				common.FatalLog(common.LogText("failed to parse CHANNEL_UPDATE_FREQUENCY: %s", err.Error()))
+			}
+			go controller.AutomaticallyUpdateChannels(frequency)
 		}
-		return a
-	}
 
-	// Register the periodic channel test, upstream model update, and async task
-	// polling (Midjourney / Suno / video) jobs as scheduled system tasks
-	// (DB-lease dedup across masters + run history), then start the runner that
-	// schedules and executes them. Master-only execution and the UpdateTask
-	// switch are enforced inside the runner and each handler's Enabled().
-	controller.RegisterScheduledSystemTasks()
-	service.StartSystemTaskRunner()
+		// Codex credential auto-refresh check every 10 minutes, refresh when expires within 1 day
+		service.StartCodexCredentialAutoRefreshTask()
+
+		// Subscription quota reset task (daily/weekly/monthly/custom)
+		service.StartSubscriptionQuotaResetTask()
+
+		// Report this process as a system instance so the System Info page can show
+		// all currently alive nodes in multi-instance deployments.
+		service.StartSystemInstanceReporter()
+
+		// Wire task polling adaptor factory (breaks service -> relay import cycle).
+		// Must run before the system task runner starts: the async_task_poll handler
+		// calls service.RunTaskPollingOnce, which needs this factory set.
+		service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
+			a := relay.GetTaskAdaptor(platform)
+			if a == nil {
+				return nil
+			}
+			return a
+		}
+
+		// Register the periodic channel test, upstream model update, and async task
+		// polling (Midjourney / Suno / video) jobs as scheduled system tasks
+		// (DB-lease dedup across masters + run history), then start the runner that
+		// schedules and executes them. Master-only execution and the UpdateTask
+		// switch are enforced inside the runner and each handler's Enabled().
+		controller.RegisterScheduledSystemTasks()
+		service.StartSystemTaskRunner()
+	}
 
 	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
 		common.BatchUpdateEnabled = true
@@ -163,7 +169,7 @@ func main() {
 		model.InitBatchUpdater()
 	}
 
-	if os.Getenv("ENABLE_PPROF") == "true" {
+	if !common.PortalOnly && os.Getenv("ENABLE_PPROF") == "true" {
 		gopool.Go(func() {
 			log.Println(http.ListenAndServe("0.0.0.0:8005", nil))
 		})
@@ -203,7 +209,7 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:    ":" + port,
+		Addr:    os.Getenv("LISTEN_ADDRESS") + ":" + port,
 		Handler: server,
 	}
 
@@ -291,6 +297,9 @@ func InitResources() error {
 
 	// 加载环境变量
 	common.InitEnv()
+	if err := common.InitServiceRole(); err != nil {
+		return err
+	}
 
 	logger.SetupLogger()
 
@@ -317,6 +326,9 @@ func InitResources() error {
 	}
 
 	model.CheckSetup()
+	if common.PortalOnly && !constant.Setup {
+		return errors.New("initialize the database using the management server before starting the portal")
+	}
 
 	// Initialize options, should after model.InitDB()
 	if common.IsMasterNode {

@@ -34,7 +34,9 @@ For commercial licensing, please contact support@quantumnous.com
  * "not worth a request right now", not as "signed out", and must still be able
  * to reach the server when authentication actually matters.
  */
-export const SESSION_HINT_COOKIE_NAME = 'new_api_has_session'
+export const SESSION_HINT_COOKIE_NAME = import.meta.env.PORTAL_ONLY
+  ? 'new_api_portal_has_session'
+  : 'new_api_has_session'
 
 /** Read a cookie value out of a `document.cookie`-shaped string. */
 export function readCookie(cookieHeader: string, name: string): string | null {
@@ -56,7 +58,5 @@ export function readCookie(cookieHeader: string, name: string): string | null {
  */
 export function hasSessionHint(): boolean {
   if (typeof document === 'undefined') return true
-  return (
-    readCookie(document.cookie, SESSION_HINT_COOKIE_NAME) !== null
-  )
+  return readCookie(document.cookie, SESSION_HINT_COOKIE_NAME) !== null
 }

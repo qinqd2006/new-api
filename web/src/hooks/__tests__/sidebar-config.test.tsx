@@ -63,6 +63,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
   useAuthStore.getState().auth.reset()
 })
 
@@ -304,6 +305,20 @@ describe('model pricing badge', () => {
     issues = []
     await act(() => invalidateModelPricing(client))
     await waitFor(() => expect(badgedEntries()).toHaveLength(0))
+  })
+
+  it('portal never exposes admin navigation or fetches admin pricing even with cached root role', async () => {
+    vi.stubEnv('PORTAL_ONLY', 'true')
+    const { get } = await renderSidebar(
+      '/system-settings/site',
+      ROLE.SUPER_ADMIN,
+      () => [issue('kling-v3', 'kling')]
+    )
+    expect(
+      await screen.findByRole('list', { name: 'Badged entries' })
+    ).toBeInTheDocument()
+    expect(badgedEntries()).toHaveLength(0)
+    expect(get).not.toHaveBeenCalledWith('/api/option/model_pricing/issues')
   })
 
   it('never asks for the count below the super administrator role', async () => {

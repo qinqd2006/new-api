@@ -49,6 +49,36 @@ func TestPluginDispatcherMissFallsThroughWithoutLeakingInnerResponse(t *testing.
 	assert.Empty(t, recorder.Header().Get("Location"))
 }
 
+func TestTencentMPSNativeRootAlias(t *testing.T) {
+	plugin := compileRouterPlugin(t, "tencentmps", "1.0.0", `[
+		{method: "POST", path: "/tencentmps", type: "dynamic"}
+	]`)
+	var routedPath, routedRequestURI string
+	handlers := testPluginRouteHandlers(func(c *gin.Context, _ *jsplugin.RoutingGeneration, _ jsplugin.RouteBinding) {
+		routedPath = c.Request.URL.Path
+		routedRequestURI = c.Request.RequestURI
+		c.Status(http.StatusNoContent)
+	})
+	outer, registry := newPluginRouterTest(t, []*jsplugin.LoadedPlugin{plugin}, handlers)
+	outer.NoRoute(
+		(&pluginRouteDispatcher{registry: registry}).dispatch,
+		func(c *gin.Context) { c.String(http.StatusOK, c.Request.RequestURI) },
+	)
+
+	request := httptest.NewRequest(http.MethodPost, "/?trace=1", nil)
+	request.Header.Set("X-TC-Action", "CreateAigcImageTask")
+	aliased := httptest.NewRecorder()
+	outer.ServeHTTP(aliased, request)
+
+	assert.Equal(t, http.StatusNoContent, aliased.Code)
+	assert.Equal(t, "/tencentmps", routedPath)
+	assert.Equal(t, "/tencentmps?trace=1", routedRequestURI)
+
+	withoutAction := performPluginRequest(outer, http.MethodPost, "/?trace=2")
+	assert.Equal(t, http.StatusOK, withoutAction.Code)
+	assert.Equal(t, "/?trace=2", withoutAction.Body.String())
+}
+
 func TestPluginDebugLogsOnlyOwnedRoutes(t *testing.T) {
 	previousDebug := common.DebugEnabled
 	common.DebugEnabled = true
@@ -932,11 +962,12 @@ func TestNativeRouteCredentialFormsAuthenticateThroughTokenAuth(t *testing.T) {
 	allowedIPs := "10.9.8.0/24"
 	require.NoError(t, model.DB.Create(&model.Token{UserId: user.Id, Key: "nativeauthkey", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true}).Error)
 	require.NoError(t, model.DB.Create(&model.Token{UserId: user.Id, Key: "nativeiplimited", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true, AllowIps: &allowedIPs}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{UserId: user.Id, Key: "nativeexpired", Status: common.TokenStatusEnabled, ExpiredTime: common.GetTimestamp() - 1, UnlimitedQuota: true}).Error)
 
 	outer := gin.New()
 	SetTaskPluginProtocolRouter(outer)
 	registry := jsplugin.NewRegistry()
-	for _, key := range []string{"vidu", "google", "doubao"} {
+	for _, key := range []string{"vidu", "google", "doubao", "tencentmps"} {
 		source, err := plugins.Source(key)
 		require.NoError(t, err)
 		_, err = registry.RegisterFactory(source, jsplugin.Options{Key: key})
@@ -960,6 +991,7 @@ func TestNativeRouteCredentialFormsAuthenticateThroughTokenAuth(t *testing.T) {
 		header, value string
 		status        int
 		requestURI    string
+		action        string
 	}{
 		{name: "Vidu Token form", method: http.MethodPost, path: "/ent/v2/text2video", header: "Authorization", value: "Token nativeauthkey", status: http.StatusOK},
 		{name: "Vidu Token form under /vidu", method: http.MethodPost, path: "/vidu/ent/v2/text2video", header: "Authorization", value: "token nativeauthkey", status: http.StatusOK},
@@ -976,12 +1008,22 @@ func TestNativeRouteCredentialFormsAuthenticateThroughTokenAuth(t *testing.T) {
 		{name: "invalid token in the Gemini header form", method: http.MethodGet, path: "/google" + operation, header: "X-Goog-Api-Key", value: "nativewrongkey", status: http.StatusUnauthorized},
 		{name: "invalid token in the Gemini query form", method: http.MethodGet, path: "/google" + operation + "?key=nativewrongkey", status: http.StatusUnauthorized},
 		{name: "IP limits apply to the Token form", method: http.MethodPost, path: "/ent/v2/text2video", header: "Authorization", value: "Token nativeiplimited", status: http.StatusForbidden},
+		{name: "Tencent MPS TC3 form at native root", method: http.MethodPost, path: "/", header: "Authorization", value: "TC3-HMAC-SHA256 Credential=nativeauthkey/2026-11-12/mps/tc3_request, SignedHeaders=content-type;host, Signature=" + strings.Repeat("a", 64), action: "CreateAigcImageTask", status: http.StatusOK, requestURI: "/tencentmps"},
+		{name: "Tencent MPS TC3 form at direct route", method: http.MethodPost, path: "/tencentmps", header: "Authorization", value: "TC3-HMAC-SHA256 Credential=nativeauthkey/2026-11-12/mps/tc3_request, SignedHeaders=content-type;host, Signature=" + strings.Repeat("a", 64), action: "CreateAigcImageTask", status: http.StatusOK},
+		{name: "invalid token in Tencent MPS TC3 form", method: http.MethodPost, path: "/", header: "Authorization", value: "TC3-HMAC-SHA256 Credential=nativewrongkey/2026-11-12/mps/tc3_request, SignedHeaders=content-type;host, Signature=" + strings.Repeat("a", 64), action: "CreateAigcImageTask", status: http.StatusUnauthorized},
+		{name: "wrong service in Tencent MPS TC3 form", method: http.MethodPost, path: "/", header: "Authorization", value: "TC3-HMAC-SHA256 Credential=nativeauthkey/2026-11-12/cvm/tc3_request, SignedHeaders=content-type;host, Signature=" + strings.Repeat("a", 64), action: "CreateAigcImageTask", status: http.StatusUnauthorized},
+		{name: "expired token in Tencent MPS TC3 form", method: http.MethodPost, path: "/", header: "Authorization", value: "TC3-HMAC-SHA256 Credential=nativeexpired/2026-11-12/mps/tc3_request, SignedHeaders=content-type;host, Signature=" + strings.Repeat("a", 64), action: "CreateAigcImageTask", status: http.StatusUnauthorized},
+		{name: "Tencent MPS TC3 form on another plugin", method: http.MethodPost, path: "/vidu/ent/v2/text2video", header: "Authorization", value: "TC3-HMAC-SHA256 Credential=nativeauthkey/2026-11-12/mps/tc3_request, SignedHeaders=content-type;host, Signature=" + strings.Repeat("a", 64), status: http.StatusUnauthorized},
+		{name: "IP limits apply to Tencent MPS TC3 form", method: http.MethodPost, path: "/", header: "Authorization", value: "TC3-HMAC-SHA256 Credential=nativeiplimited/2026-11-12/mps/tc3_request, SignedHeaders=content-type;host, Signature=" + strings.Repeat("a", 64), action: "CreateAigcImageTask", status: http.StatusForbidden},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			request := httptest.NewRequest(testCase.method, testCase.path, strings.NewReader(`{}`))
 			request.RemoteAddr = "192.0.2.10:1234"
 			if testCase.header != "" {
 				request.Header.Set(testCase.header, testCase.value)
+			}
+			if testCase.action != "" {
+				request.Header.Set("X-TC-Action", testCase.action)
 			}
 			recorder := httptest.NewRecorder()
 			outer.ServeHTTP(recorder, request)
@@ -995,7 +1037,7 @@ func TestNativeRouteCredentialFormsAuthenticateThroughTokenAuth(t *testing.T) {
 				assert.Equal(t, fmt.Sprintf("user %d %s", user.Id, requestURI), recorder.Body.String())
 				return
 			}
-			for _, secret := range []string{"nativeauthkey", "nativewrongkey", "nativeiplimited"} {
+			for _, secret := range []string{"nativeauthkey", "nativewrongkey", "nativeiplimited", "nativeexpired"} {
 				assert.NotContains(t, recorder.Body.String(), secret)
 			}
 		})

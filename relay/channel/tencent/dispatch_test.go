@@ -1,6 +1,7 @@
 package tencent
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
@@ -69,4 +70,23 @@ func TestDispatchAdaptorInit(t *testing.T) {
 			assert.Equal(t, tt.wantBaseURL, info.ChannelBaseUrl)
 		})
 	}
+}
+
+func TestModelListIncludesTokenHubCompatibleCatalog(t *testing.T) {
+	for _, model := range []string{
+		"hy4",
+		"deepseek/deepseek-v4-flash",
+		"glm-5.3",
+		"kimi-k3.1-pro",
+		"minimax-m3.1-flash",
+		"mimo-v2.6-pro",
+		"youtu-vita",
+		"hy-vision-2.0-instruct",
+		"kinfra-text-embedding-0.6b",
+		"kinfra-vl-embedding-8b",
+	} {
+		assert.True(t, slices.Contains(ModelList, model), "missing TokenHub model %q", model)
+	}
+
+	assert.False(t, slices.Contains(ModelList, "wand-vega-image-lite"), "task models belong to the TokenHub task plugin")
 }

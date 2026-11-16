@@ -21,7 +21,9 @@
     "copyright:check": "node scripts/add-copyright.mjs --check",
     "copyright": "node scripts/add-copyright.mjs",
     "i18n:sync": "node scripts/sync-i18n.mjs",
-    "knip": "knip"
+    "knip": "knip",
+    "build:portal": "NEW_API_WEB_SURFACE=portal rsbuild build",
+    "dev:portal": "NEW_API_WEB_SURFACE=portal VITE_REACT_APP_SERVER_URL=http://127.0.0.1:3001 rsbuild dev --port 5174"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

@@ -290,3 +290,19 @@ func TestGlobalWebRateLimitCountsFrontendFilesInStaticBucket(t *testing.T) {
 		assert.Equal(t, "1", webCount)
 	})
 }
+
+func TestPortalLoginRateLimitDoesNotExhaustManagementBudget(t *testing.T) {
+	useRateLimitMiniRedis(t)
+	previous := common.PortalOnly
+	t.Cleanup(func() { common.PortalOnly = previous })
+	common.PortalOnly = true
+	portal := gin.New()
+	portal.GET("/login", rateLimitFactory(1, 60, "CT"), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	common.PortalOnly = false
+	management := gin.New()
+	management.GET("/login", rateLimitFactory(1, 60, "CT"), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(portal, "/login", "192.0.2.10:1234").Code)
+	assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(portal, "/login", "192.0.2.10:1234").Code)
+	assert.Equal(t, http.StatusNoContent, performRateLimitRequest(management, "/login", "192.0.2.10:1234").Code)
+	assert.Equal(t, http.StatusTooManyRequests, performRateLimitRequest(management, "/login", "192.0.2.10:1234").Code)
+}

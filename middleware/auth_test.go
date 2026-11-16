@@ -615,3 +615,63 @@ func TestApplyWebSocketSubprotocolAuthorizationReadsRepeatedHeaders(t *testing.T
 	assert.True(t, applyWebSocketSubprotocolAuthorization(header))
 	assert.Equal(t, "Bearer sk-later-field", header.Get("Authorization"))
 }
+
+func TestPortalRejectsPrivilegedPersonalAccessToken(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	previous := common.PortalOnly
+	common.PortalOnly = true
+	t.Cleanup(func() { common.PortalOnly = previous })
+	user := createMiddlewarePATUser(t, "portal-admin", "portal-admin-pat")
+	require.NoError(t, model.DB.Model(user).Update("role", common.RoleRootUser).Error)
+	engine := gin.New()
+	engine.GET("/api/user/self", UserAuth(), func(c *gin.Context) { c.Status(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodGet, "/api/user/self", nil)
+	req.Header.Set("Authorization", "Bearer portal-admin-pat")
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+func TestPortalSessionIsAcceptedOnlyByUnprivilegedPlayground(t *testing.T) {
+	setupDashboardAuthMiddlewareTest(t)
+	oldPortal, oldPortalSecret := common.PortalOnly, common.PortalSessionSecret
+	t.Cleanup(func() { common.PortalOnly, common.PortalSessionSecret = oldPortal, oldPortalSecret })
+	common.PortalOnly = false
+	fullSecret := common.SessionSecret
+	common.PortalSessionSecret = "dedicated-portal-test-signing-key"
+	for _, role := range []int{common.RoleCommonUser, common.RoleRootUser} {
+		user := createMiddlewarePATUser(t, fmt.Sprintf("playground-%d", role), fmt.Sprintf("unused-pat-%d", role))
+		require.NoError(t, model.DB.Model(user).Update("role", role).Error)
+		common.SessionSecret = common.PortalSessionSecret
+		bundle, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "portal")
+		require.NoError(t, err)
+		common.SessionSecret = fullSecret
+		engine := gin.New()
+		engine.POST("/pg/chat/completions", PlaygroundAuth(), func(c *gin.Context) { assert.Equal(t, user.Id, c.GetInt("id")); c.Status(http.StatusNoContent) })
+		engine.GET("/api/user/self", UserAuth(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+		for _, path := range []string{"/pg/chat/completions", "/api/user/self"} {
+			method := http.MethodGet
+			if strings.HasPrefix(path, "/pg/") {
+				method = http.MethodPost
+			}
+			request := httptest.NewRequest(method, path, nil)
+			request.Header.Set("Authorization", "Bearer "+bundle.AccessToken)
+			w := httptest.NewRecorder()
+			engine.ServeHTTP(w, request)
+			expected := http.StatusUnauthorized
+			if path == "/pg/chat/completions" && role == common.RoleCommonUser {
+				expected = http.StatusNoContent
+			}
+			assert.Equal(t, expected, w.Code, "role=%d path=%s", role, path)
+		}
+		identity, err := service.ParsePortalPlaygroundToken(bundle.AccessToken)
+		require.NoError(t, err)
+		_, err = model.RevokeUserSession(user.Id, identity.SessionID, "test-revocation")
+		require.NoError(t, err)
+		request := httptest.NewRequest(http.MethodPost, "/pg/chat/completions", nil)
+		request.Header.Set("Authorization", "Bearer "+bundle.AccessToken)
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, request)
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	}
+}

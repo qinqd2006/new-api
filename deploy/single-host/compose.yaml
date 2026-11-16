@@ -1,0 +1,55 @@
+name: new-api
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports: ["127.0.0.1:${PG_PORT:-15432}:5432"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: newapi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?required}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/10-new-api.sh:ro
+    networks: [data]
+    logging: *logging
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d newapi']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    ports: ["127.0.0.1:${REDIS_PORT:-16379}:6379"]
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+    command:
+      - /bin/sh
+      - -ec
+      - 'exec redis-server --appendonly yes --appendfsync everysec --requirepass "$$REDIS_PASSWORD" --maxmemory 256mb --maxmemory-policy noeviction'
+    volumes: [redis-data:/data]
+    networks: [data]
+    logging: *logging
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -qx PONG']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+networks:
+  data:
+    internal: true
+
+volumes:
+  postgres-data:
+  redis-data:

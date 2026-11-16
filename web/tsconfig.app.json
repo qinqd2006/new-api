@@ -19,7 +19,8 @@
 
     /* Alias */
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@app-route-tree": ["./src/routeTree.gen.ts"]
     },
 
     /* Linting */

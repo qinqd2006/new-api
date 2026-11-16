@@ -1,0 +1,42 @@
+# Use an already initialized shared database. Run the full service first.
+# Build the image from the repository root: docker build -t new-api:split .
+# Supply secrets via the deployment environment; never reuse the signing keys.
+services:
+  management-gateway:
+    image: new-api:split
+    restart: unless-stopped
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      SERVICE_ROLE: full
+      SQL_DSN: ${MANAGEMENT_SQL_DSN:?required}
+      LOG_SQL_DSN: ${MANAGEMENT_LOG_SQL_DSN:-}
+      REDIS_CONN_STRING: ${REDIS_CONN_STRING:?required}
+      SESSION_SECRET: ${MANAGEMENT_SESSION_SECRET:?required}
+      PORTAL_SESSION_SECRET: ${PORTAL_SESSION_SECRET:?required}
+      CRYPTO_SECRET: ${CRYPTO_SECRET:?use existing key}
+      SESSION_COOKIE_SECURE: "true"
+      SESSION_COOKIE_TRUSTED_URL: ${ADMIN_PUBLIC_URL:?required}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?explicit proxy addresses required}
+      NODE_NAME: management-gateway
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  portal:
+    image: new-api:split
+    restart: unless-stopped
+    ports: ["127.0.0.1:3001:3000"]
+    environment:
+      SERVICE_ROLE: portal
+      SQL_DSN: ${PORTAL_SQL_DSN:?use a separate database login}
+      LOG_SQL_DSN: ${PORTAL_LOG_SQL_DSN:-}
+      REDIS_CONN_STRING: ${REDIS_CONN_STRING:?required}
+      PORTAL_SESSION_SECRET: ${PORTAL_SESSION_SECRET:?required}
+      CRYPTO_SECRET: ${CRYPTO_SECRET:?use existing key}
+      PORTAL_PUBLIC_URL: ${PORTAL_PUBLIC_URL:?required}
+      PORTAL_GATEWAY_URL: ${PORTAL_GATEWAY_URL:?required}
+      PORTAL_GATEWAY_INTERNAL_URL: http://management-gateway:3000
+      SESSION_COOKIE_SECURE: "true"
+      SESSION_COOKIE_TRUSTED_URL: ${PORTAL_PUBLIC_URL:?required}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?explicit proxy addresses required}
+      NODE_NAME: user-portal
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]

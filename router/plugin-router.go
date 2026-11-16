@@ -441,6 +441,7 @@ func (d *pluginRouteDispatcher) dispatch(c *gin.Context) {
 		c.Next()
 		return
 	}
+	restoreRequestPath := aliasTencentMPSRootRequest(generation, c.Request)
 
 	previousTag, hadPreviousTag := c.Get(middleware.RouteTagKey)
 	c.Set(middleware.RouteTagKey, "relay")
@@ -462,6 +463,9 @@ func (d *pluginRouteDispatcher) dispatch(c *gin.Context) {
 		c.Abort()
 		return
 	}
+	if restoreRequestPath != nil {
+		restoreRequestPath()
+	}
 
 	c.Request = c.Request.WithContext(originalContext)
 	if hadPreviousTag {
@@ -470,6 +474,41 @@ func (d *pluginRouteDispatcher) dispatch(c *gin.Context) {
 		delete(c.Keys, middleware.RouteTagKey)
 	}
 	c.Next()
+}
+
+// aliasTencentMPSRootRequest lets an official Tencent Cloud MPS client replace
+// only its endpoint and credentials. Tencent sends every action to POST /,
+// while plugin routes intentionally cannot own the gateway root. The rewrite
+// is private to the plugin dispatcher and is rolled back if no plugin claims
+// it, so the host's ordinary root handling remains unchanged.
+func aliasTencentMPSRootRequest(generation *jsplugin.RoutingGeneration, request *http.Request) func() {
+	if request.Method != http.MethodPost || request.URL.Path != "/" || strings.TrimSpace(request.Header.Get("X-TC-Action")) == "" {
+		return nil
+	}
+	plugin, exists := generation.Get("tencentmps")
+	if !exists {
+		return nil
+	}
+	servesNativeRoute := false
+	for _, binding := range jsplugin.PluginRouteBindings(plugin) {
+		if binding.Route.Method == http.MethodPost && binding.Route.Path == "/tencentmps" {
+			servesNativeRoute = true
+			break
+		}
+	}
+	if !servesNativeRoute {
+		return nil
+	}
+
+	originalPath, originalRawPath, originalRequestURI := request.URL.Path, request.URL.RawPath, request.RequestURI
+	request.URL.Path = "/tencentmps"
+	request.URL.RawPath = ""
+	request.RequestURI = request.URL.RequestURI()
+	return func() {
+		request.URL.Path = originalPath
+		request.URL.RawPath = originalRawPath
+		request.RequestURI = originalRequestURI
+	}
 }
 
 // handOffNativeTaskQuery answers GET /v1/videos/:task_id in the task's own wire

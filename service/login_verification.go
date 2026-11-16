@@ -43,7 +43,7 @@ type LoginVerification struct {
 }
 
 func StartLoginVerification(user *model.User, loginMethod string, migration *LegacyGitHubMigration) (*LoginChallenge, error) {
-	if user == nil || user.Id <= 0 || user.AuthVersion <= 0 || loginMethod == "" {
+	if user == nil || (common.PortalOnly && user.Role != common.RoleCommonUser) || user.Id <= 0 || user.AuthVersion <= 0 || loginMethod == "" {
 		return nil, model.ErrAuthFlowInvalid
 	}
 	state, err := model.GetUserVerificationState(user.Id)

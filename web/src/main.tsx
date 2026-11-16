@@ -1,3 +1,5 @@
+// Generated Routes
+import { routeTree } from '@app-route-tree'
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -22,18 +24,16 @@ import { StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
 
 import { installBuildMetadata } from '@/lib/build-metadata'
-import { applyFaviconToDom } from '@/lib/dom-utils'
 import '@/lib/dayjs'
+import { applyFaviconToDom } from '@/lib/dom-utils'
 import { initializeFrontendCache } from '@/lib/frontend-cache'
 import { createAppQueryClient } from '@/lib/query-client'
 import { readCachedStatus, statusQueryOptions } from '@/lib/status-query'
 
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
-import { ThemeProvider } from './context/theme-provider'
 import './i18n/config'
-// Generated Routes
-import { routeTree } from './routeTree.gen'
+import { ThemeProvider } from './context/theme-provider'
 
 // Styles
 import './styles/index.css'

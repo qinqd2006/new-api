@@ -231,6 +231,9 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 	if lookup.user == nil {
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
 	}
+	if common.PortalOnly && lookup.user.Role != common.RoleCommonUser {
+		return nil, service.AuthIdentity{}, dashboardCredentialPAT, service.ErrAuthTokenInvalid
+	}
 	return lookup.user, service.AuthIdentity{UserID: lookup.user.Id, UserAuthVersion: lookup.user.AuthVersion}, dashboardCredentialPAT, nil
 }
 
@@ -720,4 +723,30 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 		}
 	}
 	return nil
+}
+
+// PlaygroundAuth allows portal sessions only on the dedicated gateway
+// playground endpoint, and always rejects privileged portal identities.
+func PlaygroundAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		raw, ok := authorizationToken(c.GetHeader("Authorization"))
+		if ok {
+			identity, err := service.ParsePortalPlaygroundToken(raw)
+			if err == nil {
+				_, user, err := service.ValidateLoginSession(identity)
+				if err != nil {
+					writeDashboardAuthError(c, err)
+					return
+				}
+				if user.Role != common.RoleCommonUser {
+					writeDashboardAuthError(c, service.ErrAuthTokenInvalid)
+					return
+				}
+				setDashboardAuthContext(c, user, identity, false)
+				c.Next()
+				return
+			}
+		}
+		authHelper(c, common.RoleCommonUser)
+	}
 }

@@ -83,7 +83,22 @@ func IssueAccessToken(identity AuthIdentity) (string, int64, error) {
 }
 
 func ParseAccessToken(raw string) (AuthIdentity, error) {
-	claims, err := parseAuthClaims(raw, accessTokenUse, authSigningKey(accessTokenUse))
+	return parseAccessTokenWithKey(raw, authSigningKey(accessTokenUse))
+}
+
+// ParsePortalPlaygroundToken is accepted ONLY by the gateway playground route.
+// Management routes continue to use ParseAccessToken and their own secret.
+func ParsePortalPlaygroundToken(raw string) (AuthIdentity, error) {
+	if common.PortalSessionSecret == "" {
+		return AuthIdentity{}, ErrAuthTokenInvalid
+	}
+	mac := hmac.New(sha256.New, []byte(common.PortalSessionSecret))
+	_, _ = mac.Write([]byte("new-api/auth/" + accessTokenUse + "/v1"))
+	return parseAccessTokenWithKey(raw, mac.Sum(nil))
+}
+
+func parseAccessTokenWithKey(raw string, key []byte) (AuthIdentity, error) {
+	claims, err := parseAuthClaims(raw, accessTokenUse, key)
 	if err != nil {
 		return AuthIdentity{}, err
 	}

@@ -120,7 +120,10 @@ export async function previewModelPricing(request: {
 }
 
 export function useCanEditModelPricing() {
-  return useAuthStore((state) => state.auth.user?.role === ROLE.SUPER_ADMIN)
+  return useAuthStore(
+    (state) =>
+      !import.meta.env.PORTAL_ONLY && state.auth.user?.role === ROLE.SUPER_ADMIN
+  )
 }
 
 export async function getModelPricing(

@@ -13,6 +13,10 @@ export interface HostUtils {
   unixNow(): number;
   uuid(): string;
   hmacSHA256(message: string, secret: string): string;
+  /** HMAC-SHA256 in lowercase hex, decoding the secret argument from hexadecimal first. */
+  hmacSHA256HexKey(message: string, secretHex: string): string;
+  /** Plain SHA-256 digest in lowercase hex, without a key. Needed by signing schemes that hash the payload before deriving a keyed signature, such as Tencent Cloud TC3-HMAC-SHA256. */
+  sha256Hex(message: string): string;
   jwtSignHS256(claims: Record<string, JSONValue>, secret: string): string;
   base64(value: string): string;
   base64URL(value: string): string;

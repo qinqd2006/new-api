@@ -153,3 +153,23 @@ func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
 	require.NoError(t, db.First(&stored, user.Id).Error)
 	assert.Equal(t, previousLastLoginAt, stored.LastLoginAt)
 }
+
+func TestPortalCannotResetAdministratorPassword(t *testing.T) {
+	user, identity := setupSecurityEnrollmentTest(t)
+	previous := common.PortalOnly
+	common.PortalOnly = true
+	t.Cleanup(func() { common.PortalOnly = previous })
+	require.NoError(t, model.DB.Model(user).Updates(map[string]any{"role": common.RoleRootUser, "email": "portal-admin@example.com"}).Error)
+	before := user.Password
+	common.RegisterVerificationCodeWithKey("portal-admin@example.com", "known-reset-code", common.PasswordResetPurpose)
+	t.Cleanup(func() { common.DeleteKey("portal-admin@example.com", common.PasswordResetPurpose) })
+	w := securityEnrollmentRequest(http.MethodPost, "/api/user/reset", `{"email":"portal-admin@example.com","token":"known-reset-code"}`, "", identity, ResetPassword)
+	var response struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(w.Body.Bytes(), &response))
+	assert.False(t, response.Success)
+	var current model.User
+	require.NoError(t, model.DB.First(&current, user.Id).Error)
+	assert.Equal(t, before, current.Password)
+}

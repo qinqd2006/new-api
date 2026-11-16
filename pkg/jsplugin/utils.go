@@ -106,6 +106,35 @@ func injectGlobals(runtime *moejs.Runtime, identity func() string, now func() ti
 			_, _ = mac.Write([]byte(message))
 			return moejs.String(hex.EncodeToString(mac.Sum(nil))), nil
 		}),
+		"hmacSHA256HexKey": runtime.Function("hmacSHA256HexKey", 2, func(r *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
+			message, err := stringValue(r, moejs.Arg(args, 0))
+			if err != nil {
+				return moejs.Undefined(), err
+			}
+			secretHex, err := stringValue(r, moejs.Arg(args, 1))
+			if err != nil {
+				return moejs.Undefined(), err
+			}
+			secret, err := hex.DecodeString(secretHex)
+			if err != nil {
+				return moejs.Undefined(), r.TypeError("hmacSHA256HexKey secret must be hexadecimal")
+			}
+			mac := hmac.New(sha256.New, secret)
+			_, _ = mac.Write([]byte(message))
+			return moejs.String(hex.EncodeToString(mac.Sum(nil))), nil
+		}),
+		// sha256Hex is the plain SHA-256 digest in lowercase hex, without a key.
+		// Signing schemes such as Tencent Cloud's TC3-HMAC-SHA256 hash the
+		// payload and the canonical request with it before deriving the keyed
+		// signature, so a plugin cannot build the header from hmacSHA256 alone.
+		"sha256Hex": runtime.Function("sha256Hex", 1, func(r *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
+			message, err := stringValue(r, moejs.Arg(args, 0))
+			if err != nil {
+				return moejs.Undefined(), err
+			}
+			sum := sha256.Sum256([]byte(message))
+			return moejs.String(hex.EncodeToString(sum[:])), nil
+		}),
 		"base64": runtime.Function("base64", 1, func(r *moejs.Realm, _ moejs.Value, args []moejs.Value) (moejs.Value, error) {
 			value, err := stringValue(r, moejs.Arg(args, 0))
 			if err != nil {

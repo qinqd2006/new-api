@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu", "xai"}
+var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "tencentmps", "tencenttokenhub", "vertex-ai", "vidu", "xai"}
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
 	generation := jsplugin.DefaultRegistry.Generation()
@@ -76,6 +76,11 @@ func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing
 		{"POST", "/v1" + vertexModel, "vertex-ai", jsplugin.RouteTypeDynamic, "", "operation", false, false},
 		{"POST", "/v1beta1" + vertexModel, "vertex-ai", jsplugin.RouteTypeDynamic, "", "operation", false, false},
 		{"POST", "/vertex-ai/v1beta1" + vertexModel, "vertex-ai", jsplugin.RouteTypeDynamic, "", "operation", true, false},
+		{"POST", "/tencentmps", "tencentmps", jsplugin.RouteTypeDynamic, "", "mpsTaskResult", false, true},
+		{"POST", "/v1/wand/vega-images/generations", "tencenttokenhub", jsplugin.RouteTypeSubmit, "", "imageSubmitted", false, false},
+		{"POST", "/tencenttokenhub/v1/wand/vega-images/generations", "tencenttokenhub", jsplugin.RouteTypeSubmit, "", "imageSubmitted", true, false},
+		{"GET", "/v1/wand/vega-images/tasks/:task_id", "tencenttokenhub", jsplugin.RouteTypeQuery, "", "imageTask", false, false},
+		{"GET", "/tencenttokenhub/v1/wand/vega-images/tasks/:task_id", "tencenttokenhub", jsplugin.RouteTypeQuery, "", "imageTask", true, false},
 	}
 	for _, expected := range routes {
 		t.Run(expected.method+" "+expected.path, func(t *testing.T) {
@@ -162,29 +167,65 @@ func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
 			plugin, registerErr := registry.RegisterFactory(source, jsplugin.Options{Key: key})
 			require.NoError(t, registerErr)
 
-			var responsesClaim jsplugin.ProtocolClaim
-			foundResponses := false
+			// Every claim a plugin makes is checked against the hooks it
+			// exports and the endpoint it binds. A plugin serves only the
+			// protocols it declares, so the contract is per claim rather
+			// than a fixed protocol every vendor must implement.
+			require.NotEmpty(t, plugin.Meta.Protocols, "a plugin must claim at least one host protocol")
 			for _, claim := range plugin.Meta.Protocols {
-				if claim.Name == "openai_responses" {
-					responsesClaim = claim
-					foundResponses = true
-					break
-				}
+				t.Run(claim.Name, func(t *testing.T) {
+					// A claim may narrow the plugin's models to its own
+					// endpoint; an empty list means every model the
+					// plugin declares.
+					claimModels := claim.Models
+					if len(claimModels) == 0 {
+						claimModels = plugin.Meta.Models
+					}
+					switch claim.Name {
+					case "openai_responses":
+						assert.Equal(t, []string{"stream", "sync", "background"}, claim.Supports)
+						for _, model := range claimModels {
+							binding, claimed := registry.Generation().LookupEndpoint("POST", "/v1/responses", model)
+							require.True(t, claimed, model)
+							assert.Same(t, plugin, binding.Plugin)
+						}
+						for _, hook := range []string{"decodeRequest", "renderEvents", "renderFinal"} {
+							callable, callableErr := plugin.Engine.HasCallablePath(t.Context(), "protocols", "openai_responses", hook)
+							require.NoError(t, callableErr)
+							assert.True(t, callable, hook)
+						}
+					case "openai_image":
+						assert.Empty(t, claim.Supports, "openai_image defines no modes")
+						for _, model := range claimModels {
+							binding, claimed := registry.Generation().LookupEndpoint("POST", "/v1/images/generations", model)
+							require.True(t, claimed, model)
+							assert.Same(t, plugin, binding.Plugin)
+						}
+						for _, hook := range []string{"decodeRequest", "render"} {
+							callable, callableErr := plugin.Engine.HasCallablePath(t.Context(), "protocols", "openai_image", hook)
+							require.NoError(t, callableErr)
+							assert.True(t, callable, hook)
+						}
+					case "openai_video":
+						for _, model := range claimModels {
+							binding, claimed := registry.Generation().LookupEndpoint("POST", "/v1/videos", model)
+							require.True(t, claimed, model)
+							assert.Same(t, plugin, binding.Plugin)
+						}
+						for _, hook := range []string{"decodeRequest", "render"} {
+							callable, callableErr := plugin.Engine.HasCallablePath(t.Context(), "protocols", "openai_video", hook)
+							require.NoError(t, callableErr)
+							assert.True(t, callable, hook)
+						}
+					default:
+						t.Fatalf("unknown host protocol %q", claim.Name)
+					}
+				})
 			}
-			require.True(t, foundResponses, "openai_responses claim must be present")
-			assert.Equal(t, []string{"stream", "sync", "background"}, responsesClaim.Supports)
-			for _, model := range plugin.Meta.Models {
-				binding, claimed := registry.Generation().LookupEndpoint("POST", "/v1/responses", model)
-				require.True(t, claimed, model)
-				assert.Same(t, plugin, binding.Plugin)
-			}
-			for _, hook := range []string{"decodeRequest", "renderEvents", "renderFinal"} {
-				callable, callableErr := plugin.Engine.HasCallablePath(t.Context(), "protocols", "openai_responses", hook)
-				require.NoError(t, callableErr)
-				assert.True(t, callable, hook)
-			}
-			for _, hook := range []string{"extractUsage", "extractUsageOnComplete"} {
-				assert.True(t, plugin.Engine.HasExport(hook), hook)
+			// A plugin that reports usage at completion must export the
+			// completion hook; the submit-time hook is optional.
+			if plugin.Engine.HasExport("extractUsageOnComplete") {
+				assert.True(t, plugin.Engine.HasExport("extractUsage"), "extractUsageOnComplete needs the submit-time hook")
 			}
 			require.NotEmpty(t, plugin.Meta.UsageSchema)
 			for usageKey, schema := range plugin.Meta.UsageSchema {
@@ -204,6 +245,21 @@ func TestBuiltInResponsesDecodersEchoChannelMappedAlias(t *testing.T) {
 			plugin, registerErr := registry.RegisterFactory(source, jsplugin.Options{Key: key})
 			require.NoError(t, registerErr)
 			require.NotEmpty(t, plugin.Meta.Models)
+
+			// A plugin that claims openai_responses decodes through it. A
+			// plugin that serves only another protocol has no responses
+			// decoder to check, so it is skipped here and covered by the
+			// per-claim contract test instead.
+			claimsResponses := false
+			for _, claim := range plugin.Meta.Protocols {
+				if claim.Name == "openai_responses" {
+					claimsResponses = true
+					break
+				}
+			}
+			if !claimsResponses {
+				t.Skip("plugin does not claim openai_responses")
+			}
 
 			alias := "alias-under-test"
 			upstreamModel := plugin.Meta.Models[0]

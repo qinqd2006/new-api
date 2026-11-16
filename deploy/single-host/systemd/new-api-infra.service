@@ -1,0 +1,18 @@
+[Unit]
+Description=new-api PostgreSQL and Redis containers
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+WorkingDirectory=/etc/new-api/infra
+ExecStart=/usr/bin/docker compose --project-name new-api --env-file /etc/new-api/infra/.env -f /etc/new-api/infra/compose.yaml up -d --wait --wait-timeout 180 postgres redis
+ExecStop=/usr/bin/docker compose --project-name new-api --env-file /etc/new-api/infra/.env -f /etc/new-api/infra/compose.yaml stop
+TimeoutStartSec=300
+TimeoutStopSec=120
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

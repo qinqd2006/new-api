@@ -146,6 +146,10 @@ func writeRateLimited(c *gin.Context, retryAfterSeconds int64) {
 }
 
 func rateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gin.Context) {
+	// Shared Redis must not let public portal traffic exhaust admin budgets.
+	if common.PortalOnly {
+		mark = "portal:" + mark
+	}
 	if common.RedisEnabled {
 		return func(c *gin.Context) {
 			redisRateLimiter(c, maxRequestNum, duration, mark)
@@ -217,6 +221,10 @@ func UploadRateLimit() func(c *gin.Context) {
 // instead of client IP, making it resistant to proxy rotation attacks.
 // Must be used AFTER authentication middleware (UserAuth).
 func userRateLimitFactory(maxRequestNum int, duration int64, mark string) func(c *gin.Context) {
+	// Shared Redis must not let public portal traffic exhaust admin budgets.
+	if common.PortalOnly {
+		mark = "portal:" + mark
+	}
 	if common.RedisEnabled {
 		return func(c *gin.Context) {
 			userID := c.GetInt("id")

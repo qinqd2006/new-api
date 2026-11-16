@@ -13,6 +13,13 @@ import (
 )
 
 func SetRouter(router *gin.Engine, assets WebAssets) {
+	if err := ConfigureCLBIngress(router); err != nil {
+		panic(err)
+	}
+	if common.PortalOnly {
+		SetPortalRouter(router)
+		return
+	}
 	SetApiRouter(router)
 	SetDashboardRouter(router)
 	SetRelayRouter(router)

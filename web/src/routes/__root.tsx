@@ -122,7 +122,9 @@ export const Route = createRootRouteWithContext<{
 
     const pathname = location?.pathname || ''
     const needsSetupCheck =
-      !setupStatusChecked && !pathname.startsWith('/setup')
+      !import.meta.env.PORTAL_ONLY &&
+      !setupStatusChecked &&
+      !pathname.startsWith('/setup')
     const authBootstrap = bootstrapAuthentication()
 
     // 只检查 setup 状态（如果需要）

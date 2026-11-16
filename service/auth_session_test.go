@@ -442,3 +442,65 @@ func TestUserAuthVersionInvalidatesExistingSession(t *testing.T) {
 	_, err = CreateLoginSessionAtAuthVersion(user.Id, identity.UserAuthVersion, "2fa", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked, "a pending 2FA flow must not survive an auth-version change")
 }
+
+func TestPortalAuthenticationIsolation(t *testing.T) {
+	oldInternal, oldPortalKey := common.PortalGatewayInternalURL, common.PortalSessionSecret
+	t.Cleanup(func() { common.PortalGatewayInternalURL, common.PortalSessionSecret = oldInternal, oldPortalKey })
+	user := setupAuthSessionTestDB(t)
+	useTestSessionSecret(t)
+	oldGateway := common.PortalGatewayURL
+	t.Cleanup(func() { common.PortalGatewayURL = oldGateway })
+	oldPortal, oldURL, oldMaster := common.PortalOnly, common.PortalPublicURL, common.IsMasterNode
+	t.Cleanup(func() { common.PortalOnly, common.PortalPublicURL, common.IsMasterNode = oldPortal, oldURL, oldMaster })
+	common.PortalOnly = false
+	fullSecret := common.SessionSecret
+	full, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "admin-host")
+	require.NoError(t, err)
+	fullFlow, _, err := model.CreateAuthFlow(model.AuthFlowCreate{Purpose: model.AuthFlowPurposeOAuth, ExpiresAt: time.Now().Add(time.Minute)})
+	require.NoError(t, err)
+	t.Setenv("SERVICE_ROLE", "portal")
+	t.Setenv("PORTAL_SESSION_SECRET", "portal-only-secret-at-least-thirty-two-bytes")
+	t.Setenv("CRYPTO_SECRET", "shared-data-encryption-secret")
+	t.Setenv("PORTAL_PUBLIC_URL", "http://localhost:3001")
+	t.Setenv("PORTAL_GATEWAY_INTERNAL_URL", "http://127.0.0.1:3000")
+	t.Setenv("PORTAL_GATEWAY_URL", "http://localhost:3000")
+	t.Setenv("PORTAL_ALLOW_INSECURE_LOCAL", "true")
+	require.NoError(t, common.InitServiceRole())
+	portalSecret := common.SessionSecret
+	assert.NotEqual(t, fullSecret, portalSecret)
+	assert.False(t, common.IsMasterNode)
+	assert.Equal(t, "new_api_portal_refresh", RefreshCookieNameForService())
+	_, internal, err := ParseDashboardAccessToken(full.AccessToken)
+	assert.True(t, internal)
+	assert.ErrorIs(t, err, ErrAuthTokenInvalid)
+	_, _, err = RefreshLoginSession(full.RefreshToken, "", "127.0.0.1", "portal")
+	assert.ErrorIs(t, err, ErrRefreshTokenInvalid)
+	_, err = model.GetAuthFlow(fullFlow, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
+	assert.ErrorIs(t, err, model.ErrAuthFlowInvalid)
+	portal, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "portal")
+	require.NoError(t, err)
+	common.PortalOnly = false
+	common.SessionSecret = fullSecret
+	_, internal, err = ParseDashboardAccessToken(portal.AccessToken)
+	assert.True(t, internal)
+	assert.ErrorIs(t, err, ErrAuthTokenInvalid)
+	_, _, err = RefreshLoginSession(portal.RefreshToken, "", "127.0.0.1", "full")
+	assert.ErrorIs(t, err, ErrRefreshTokenInvalid)
+	// Crossing surfaces does not revoke a legitimate session.
+	_, _, err = RefreshLoginSession(full.RefreshToken, "", "127.0.0.1", "full")
+	require.NoError(t, err)
+	common.PortalOnly = true
+	common.SessionSecret = portalSecret
+	_, _, err = RefreshLoginSession(portal.RefreshToken, "", "127.0.0.1", "portal")
+	require.NoError(t, err)
+	for _, role := range []int{common.RoleAdminUser, common.RoleRootUser} {
+		require.NoError(t, model.DB.Model(user).Update("role", role).Error)
+		_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "portal")
+		assert.ErrorIs(t, err, ErrLoginSessionInvalid)
+		_, _, err = newLoginSession(user.Id, user.AuthVersion, "passkey", "127.0.0.1", "portal")
+		assert.ErrorIs(t, err, ErrLoginSessionInvalid)
+		user.Role = role
+		_, err = StartLoginVerification(user, "password", nil)
+		assert.ErrorIs(t, err, model.ErrAuthFlowInvalid)
+	}
+}

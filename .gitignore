@@ -44,3 +44,11 @@ relaykit/relayconvert/chat_responses_live_local_test.go
 service/openaicompat/chat_responses_live_local_test.go
 go.work
 go.work.sum
+
+web/dist-portal
+web/src/routeTree.portal.gen.*
+
+deploy/single-host/backups/
+deploy/single-host/.state/
+deploy/single-host/__pycache__/
+deploy/single-host/.build/

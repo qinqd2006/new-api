@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,14 +61,18 @@ const (
 // NativeRouteCredential accepts, on the native routes of the built-in plugins
 // listed here, the vendor's official API-key form as the gateway token and
 // rewrites it into the Bearer form TokenAuth reads: Vidu's
-// "Authorization: Token <key>", and the Gemini API's "x-goog-api-key: <key>"
-// or "?key=<key>". A header the client already sent as Authorization wins.
+// "Authorization: Token <key>", the Gemini API's "x-goog-api-key: <key>"
+// or "?key=<key>", and Tencent MPS's SecretId in a structurally valid TC3
+// Authorization header. Tencent's signature is only a wire-format envelope
+// here: the SecretId is the gateway API token and TokenAuth remains the sole
+// credential verifier. A Bearer header the client already sent wins.
 // "?key=" is taken out of the URL in every case, so decoders, the stored
 // request path and later handlers never see it. Every other plugin's routes
 // accept the Bearer form only. pluginKeys are the plugins serving the route.
 func NativeRouteCredential(pluginKeys ...string) gin.HandlerFunc {
 	viduToken := slices.Contains(pluginKeys, "vidu")
 	googleKey := slices.Contains(pluginKeys, "google")
+	tencentMPSKey := slices.Contains(pluginKeys, "tencentmps")
 	return func(c *gin.Context) {
 		header := c.Request.Header
 		if viduToken {
@@ -103,8 +108,49 @@ func NativeRouteCredential(pluginKeys ...string) gin.HandlerFunc {
 				}
 			}
 		}
+		if tencentMPSKey {
+			if key, ok := tencentMPSAPIKey(header.Get("Authorization")); ok {
+				header.Set("Authorization", "Bearer "+key)
+			}
+		}
 		c.Next()
 	}
+}
+
+func tencentMPSAPIKey(authorization string) (string, bool) {
+	const algorithm = "TC3-HMAC-SHA256"
+
+	scheme, parameters, found := strings.Cut(strings.TrimSpace(authorization), " ")
+	if !found || scheme != algorithm {
+		return "", false
+	}
+
+	values := make(map[string]string, 3)
+	for parameter := range strings.SplitSeq(parameters, ",") {
+		name, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
+		if !found || value == "" || values[name] != "" {
+			return "", false
+		}
+		values[name] = value
+	}
+	signedHeaders, signature := values["SignedHeaders"], values["Signature"]
+	if len(values) != 3 || !slices.Contains(strings.Split(signedHeaders, ";"), "host") || len(signature) != sha256.Size*2 {
+		return "", false
+	}
+	for _, character := range signature {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", character) {
+			return "", false
+		}
+	}
+
+	credential := strings.Split(values["Credential"], "/")
+	if len(credential) != 4 || credential[0] == "" || credential[1] == "" || credential[2] != "mps" || credential[3] != "tc3_request" {
+		return "", false
+	}
+	if _, err := time.Parse(time.DateOnly, credential[1]); err != nil {
+		return "", false
+	}
+	return credential[0], true
 }
 
 // PrepareTaskPluginRoute resolves and executes the pinned declarative route.
